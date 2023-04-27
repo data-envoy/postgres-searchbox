@@ -59,6 +59,7 @@
     "@types/pg": "^8.6.6",
     "@types/pg-copy-streams": "^1.2.2",
     "@types/pg-format": "^1.0.2",
+    "@wordpress/hooks": "^3.32.0",
     "chokidar": "^3.5.3",
     "dts-bundle-generator": "^8.0.1",
     "express": "^4.18.2",

@@ -1,4 +1,5 @@
 import format from 'pg-format';
+import type { Hooks } from '../bundle.types.js';
 import type {
   Props,
   GetFiltersReturn,
@@ -19,6 +20,7 @@ export const getFilters = async ({
   facetFilters,
   numericFilters: numericFiltersMaybeString,
   numericAttributesForFiltering,
+  hooks,
 }: Props): Promise<GetFiltersReturn> => {
   // Build numericFilters based on 2 conditionals
   const numericFilters: readonly string[] = Array.isArray(
@@ -186,14 +188,20 @@ export const getFilters = async ({
       .join(' AND ');
   };
 
-  Object.entries(refinements).forEach(([attribute, type]) => {
-    sqlArray.push(typesToString({ attribute, type }));
-  });
+  Object.entries(refinements)
+    .filter(
+      ([attribute, type]) =>
+        !hooks?.applyFilters('filters.skip_WHERE', false, { attribute, type })
+    )
+    .forEach(([attribute, type]) => {
+      sqlArray.push(typesToString({ attribute, type }));
+    });
 
   return {
     db: {
       formatted: sqlArray.join(' AND '),
     },
+    extra: { refinements, typesToString },
   };
 };
 

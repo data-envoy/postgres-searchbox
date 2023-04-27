@@ -1,5 +1,6 @@
 import type { SearchOptions } from '../client.types.js';
 import type { Settings } from '../index.types.js';
+import type { Hooks } from '../bundle.types.js';
 
 /**
  * Main function props
@@ -13,6 +14,7 @@ export interface Props {
   maxFacetHits: Required<Settings>['maxFacetHits'];
   renderingContent: Required<Settings>['renderingContent'];
   numericAttributesForFiltering: Required<Settings>['numericAttributesForFiltering'];
+  hooks: Hooks;
 }
 
 export type GetFacetsReturn = {

@@ -1,11 +1,12 @@
 import pkg from 'pg';
 const { Client } = pkg;
-import format from 'pg-format';
+import format, { ident } from 'pg-format';
 // Scripts
-import { initTestDatabase } from '@scripts/mock-data.js';
+import { initTestDatabase, extendDatabase } from '@scripts/mock-data.js';
 import { createColumnAndIndex } from '@scripts/create-index.js';
 // Main functions
 import { searchHandler } from '@/index.js';
+// import type { Hooks } from './bundle.types.js';
 
 /**
  * This file is for testing the server side functions
@@ -16,6 +17,11 @@ import { searchHandler } from '@/index.js';
 describe('requestHandler', () => {
   const tableName = 'test_table';
   const initTestDatabaseParams = { tableName, rowCount: 150, fakerSeed: 123 };
+  const extendDatabaseParams = {
+    facetKeyTable: 'test_facet_key',
+    facetValueTable: 'test_facet_value',
+    facetValueLookupTable: 'test_facet_value_lookup',
+  };
 
   const defaultExpectedResult = {
     index: tableName,
@@ -46,6 +52,18 @@ describe('requestHandler', () => {
 
   const dropTables = async () => {
     // Drop the tables so that the tests can be run independently
+    await client.query(
+      format(
+        `DROP TABLE IF EXISTS %I`,
+        extendDatabaseParams.facetValueLookupTable
+      )
+    );
+    await client.query(
+      format(`DROP TABLE IF EXISTS %I`, extendDatabaseParams.facetValueTable)
+    );
+    await client.query(
+      format(`DROP TABLE IF EXISTS %I`, extendDatabaseParams.facetKeyTable)
+    );
     await client.query(format(`DROP TABLE IF EXISTS %I`, tableName));
   };
 
@@ -60,7 +78,7 @@ describe('requestHandler', () => {
   });
 
   afterAll(async () => {
-    await dropTables();
+    // await dropTables();
     await client.end();
   });
 
@@ -500,7 +518,7 @@ describe('requestHandler', () => {
       body: {
         requests: [
           {
-            params: { query: '', facetQuery: 'jac' },
+            params: { query: '', facetQuery: 'Jac' },
             indexName: tableName,
             type: 'facet',
             facet: 'brand',
@@ -521,5 +539,148 @@ describe('requestHandler', () => {
         /__ais-highlight__Jac__\/ais-highlight__/
       );
     });
+  });
+
+  it.only('should handle attributesForFaceting from secondary table', async () => {
+    // Prerequisites
+    const testIds = await initTestDatabase(initTestDatabaseParams);
+    await createColumnAndIndex({ tableName });
+    const extendResult = await extendDatabase({
+      tableName,
+      testIds,
+      fakerSeed: 123,
+      ...extendDatabaseParams,
+    });
+
+    expect(extendResult.rows).toMatchSnapshot();
+
+    // console.log(extendResult.rows[0]);
+
+    const req = {
+      body: {
+        requests: [
+          {
+            params: {
+              query: '',
+              // facetFilters: ['color:magenta'],
+              facetFilters: [
+                ['color:magenta', 'color:blue'],
+                'tag:target',
+                // 'brand:Jacobi LLC',
+                // 'brand:-test',
+              ],
+              // numericFilters: ['price>=10', 'price<=20'],
+            },
+            indexName: tableName,
+          },
+        ],
+      },
+    };
+
+    await searchHandler(req, res, {
+      indexName: tableName,
+      settings: {
+        attributesForFaceting: ['color', 'tag', 'price', 'brand'],
+        numericAttributesForFiltering: ['price'],
+      },
+      processHooks: (hooks) => {
+        hooks.addFilter(
+          'filters.skip_WHERE',
+          'pg',
+          (_value, { attribute }) => ['color', 'tag'].includes(attribute),
+          10
+        );
+        hooks.addFilter(
+          'all_selection.after_FROM',
+          'pg',
+          (value, extra) => {
+            // Only filter attributes go here
+            const otherTableRefinements = Object.entries(
+              extra.refinements
+            ).filter(([key, value]) => ['color', 'tag'].includes(key));
+
+            const sql = otherTableRefinements
+              .map(([attribute, type]) => {
+                return /* sql */ `
+              INNER JOIN test_facet_value_lookup l_${attribute} 
+                ON t.id = l_${attribute}.test_table_id
+
+                AND l_${attribute}.facet_key_id = (
+                  SELECT id FROM test_facet_key 
+                  WHERE name = '${attribute}'
+                )
+
+                AND l_${attribute}.facet_value_id IN (
+                  SELECT id FROM test_facet_value 
+                  WHERE facet_key_id = l_${attribute}.facet_key_id 
+                  AND ${extra.typesToString({ attribute: 'name', type })})
+              `;
+              })
+              .join(' ');
+
+            return value + sql;
+          },
+          10
+        );
+        hooks.addFilter(
+          'hits_selection.in_SELECT',
+          'pg',
+          (value, extra) => {
+            // All attributes in other table go here
+            const sql = ['color', 'tag']
+              .map((attribute) => {
+                return /* sql */ `
+                (
+                  SELECT array_agg(v.name) AS names
+                  FROM test_facet_value_lookup l
+                  INNER JOIN test_facet_value v        ON l.facet_value_id = v.id
+                  INNER JOIN test_facet_key   k        ON l.facet_key_id   = k.id
+
+                  WHERE l.test_table_id = 1 AND k.name = '${attribute}'
+                  GROUP BY k.id
+                ) AS ${attribute}
+                `;
+              })
+              .join(', ');
+
+            return value + ',' + sql;
+          },
+          10
+        );
+        hooks.addFilter('facets.cte', 'pg', (sql, facet) => {
+          // All attributes in other table go here
+          if (!['color', 'tag'].includes(facet)) return sql;
+
+          return /* sql */ `
+            ${facet}_selection AS (
+              SELECT coalesce( 
+                json_object_agg( name, cnt ORDER BY cnt DESC ), 
+                '{}'::json
+              ) as details
+                FROM (
+                  SELECT v.name , count(*) AS cnt
+                  FROM test_table t
+                  INNER JOIN test_facet_value_lookup l ON t.id = l.test_table_id
+                  INNER JOIN test_facet_value v        ON l.facet_value_id = v.id
+                  INNER JOIN test_facet_key   k        ON l.facet_key_id   = k.id
+                  WHERE k.name = '${facet}'
+                  GROUP by v.name
+                  ORDER BY count(*) DESC 
+                  LIMIT 10
+                ) t
+            )
+          `;
+        });
+
+        return;
+      },
+    });
+
+    // Request1
+    const results = res.json.mock.calls[0][0].results;
+
+    console.log(results[0].hits[0]);
+
+    // expect(results[0].hits[0].brand).toBe('Jacobi LLC');
   });
 });

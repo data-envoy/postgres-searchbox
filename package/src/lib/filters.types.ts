@@ -1,5 +1,6 @@
 import type { SearchOptions } from '../client.types.js';
 import type { Handler, Settings } from '../index.types.js';
+import type { Hooks } from '../bundle.types.js';
 
 /**
  * Main function props
@@ -11,6 +12,7 @@ export interface Props {
   numericAttributesForFiltering: Required<Settings>['numericAttributesForFiltering'];
   maxFacetHits: Required<Settings>['maxFacetHits'];
   extendedAttributes?: Handler.Config['extendedAttributes'];
+  hooks: Hooks;
 }
 
 export type GetFiltersReturn = {
@@ -18,6 +20,7 @@ export type GetFiltersReturn = {
     formatted: string;
     formattedJoins?: string;
   };
+  extra: { refinements: AllRefinements };
 } | null;
 
 /**
@@ -47,8 +50,6 @@ export interface Refinements {
     ['<=']?: number;
   }[];
 }
-
-// export type AllRefinements = Refinements & NumericRefinements;
 
 export type AllRefinements = {
   [attribute: string]: Refinements;

@@ -27,9 +27,7 @@ export const SearchOptionsSchema = implement<SearchOptions>().with({
   attributesToRetrieve: z.array(z.string()).optional(),
   // * Filtering
   // * ✅ 2/6 🛑
-  facetFilters: z
-    .union([z.array(z.string()), z.array(z.array(z.string()))])
-    .optional(),
+  facetFilters: z.array(z.union([z.string(), z.array(z.string())])).optional(),
   numericFilters: z.array(z.string()).optional(),
   // tagFilters: z.union([z.array(z.string()), z.string()]).optional(),
   // * Faceting

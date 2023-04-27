@@ -16,6 +16,7 @@ export const getFacets = async ({
   maxFacetHits,
   renderingContent,
   numericAttributesForFiltering,
+  hooks,
 }: Props): Promise<GetFacetsReturn> => {
   // Build facets based on 2 conditionals
   const facets: readonly string[] =
@@ -30,10 +31,9 @@ export const getFacets = async ({
   const limit = Number.isInteger(maxValuesPerFacet) ? maxValuesPerFacet : 10;
 
   // For things like
-  const cte = facets
-    .map((facet) =>
-      format(
-        /* sql */ `
+  const cteArray = facets.map((facet) => {
+    const sql = format(
+      /* sql */ `
         %I AS (
           SELECT coalesce( 
             json_object_agg( %s, cnt ORDER BY cnt DESC ), 
@@ -51,15 +51,18 @@ export const getFacets = async ({
             ) t
         )
       `,
-        `${facet}_selection`,
-        facet,
-        facet,
-        facet,
-        facet,
-        facet
-      )
-    )
-    .join(',');
+      `${facet}_selection`,
+      facet,
+      facet,
+      facet,
+      facet,
+      facet
+    );
+
+    return hooks.applyFilters('facets.cte', sql, facet);
+  });
+
+  const cte = cteArray.join(',');
 
   const statsCte = numericAttributesForFiltering
     ?.filter((f) => f !== '*')

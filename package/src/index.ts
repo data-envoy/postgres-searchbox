@@ -1,4 +1,6 @@
 import format from 'pg-format';
+import { createHooks } from '@wordpress/hooks';
+import type { Hooks } from '@wordpress/hooks';
 import { defaults, VECTOR_COLUMN } from './constants.js';
 import validate from './index.validation.js';
 import * as lib from './lib/index.js';
@@ -42,6 +44,8 @@ export async function searchHandler(
     return res.status(400).json({ error: 'Request contained invalid payload' });
   }
 
+  const hooks = createHooks();
+
   /**
    * Loop the requests and handle them individually
    */
@@ -55,11 +59,18 @@ export async function searchHandler(
     const config = Array.isArray(configs)
       ? configs?.find((config) => config.indexName === indexName)
       : configs;
+    // Process user supplied hooks
+    if (config?.processHooks) {
+      config.processHooks(hooks);
+      // Set undefined so it's not run multiple times.
+      config.processHooks = undefined;
+    }
+    // If the request is a facet search, handle it differently
     if (request.type === 'facet' && typeof request.facet === 'string') {
-      resultsPromises.push(handleFacetSearch(request, config));
+      resultsPromises.push(handleFacetSearch(request, hooks, config));
     } else {
       // Handle the request & push it to the promises array
-      resultsPromises.push(handleRequest(request, config));
+      resultsPromises.push(handleRequest(request, hooks, config));
     }
   }
 
@@ -90,6 +101,7 @@ export async function searchHandler(
 
 const handleRequest = async (
   request: Inferred.RequestInitial,
+  hooks: Hooks,
   config?: Handler.Config
 ): Promise<SearchResponse> => {
   const start = performance.now();
@@ -151,8 +163,8 @@ const handleRequest = async (
     paramsWithSettings[key] = value;
   });
 
-  const facets = await lib.getFacets(
-    pick(paramsWithSettings, [
+  const facets = await lib.getFacets({
+    ...pick(paramsWithSettings, [
       'facets',
       'attributesForFaceting',
       'maxValuesPerFacet',
@@ -160,18 +172,20 @@ const handleRequest = async (
       'maxFacetHits',
       'renderingContent',
       'numericAttributesForFiltering',
-    ])
-  );
+    ]),
+    hooks,
+  });
 
-  const filters = await lib.getFilters(
-    pick(paramsWithSettings, [
+  const filters = await lib.getFilters({
+    ...pick(paramsWithSettings, [
       'facetFilters',
       'numericFilters',
       'attributesForFaceting',
       'numericAttributesForFiltering',
       'maxFacetHits',
-    ])
-  );
+    ]),
+    hooks,
+  });
 
   const highlight = lib.getHighlight(
     pick(paramsWithSettings, [
@@ -181,6 +195,8 @@ const handleRequest = async (
       'highlightPostTag',
     ])
   );
+
+  // console.log(filters?.extra);
 
   /**
    * Database query
@@ -192,10 +208,11 @@ const handleRequest = async (
     -- Step 1: Get all the results
     --
     WITH all_selection AS (
-      SELECT *
-      FROM %I
+      SELECT t.*
+      FROM %I t
+      ${hooks.applyFilters('all_selection.after_FROM', '', filters?.extra)}
       WHERE
-        ( ( %I @@ websearch_to_tsquery(%L) AND %L <> '' )  OR %L = '' )
+        ( ( t.%I @@ websearch_to_tsquery(%L) AND %L <> '' )  OR %L = '' )
         ${filters?.db.formatted ? ` AND ${filters?.db.formatted}` : ``}
     ),
     --
@@ -205,7 +222,8 @@ const handleRequest = async (
       SELECT
         ${columns.db.formatted}
         ${highlight?.db.formatted ? `, ${highlight?.db.formatted}` : ``}
-      FROM all_selection
+        ${hooks.applyFilters('hits_selection.in_SELECT', '', filters?.extra)}
+      FROM all_selection a
       ${formattedSort}
       OFFSET %s
       LIMIT %s
@@ -240,7 +258,9 @@ const handleRequest = async (
     pagination.db.limit
   );
 
-  // console.log(formattedSql);
+  console.log(formattedSql);
+
+  // return;
 
   const result: DatabaseResult = await client.query(formattedSql);
   const {
@@ -248,7 +268,10 @@ const handleRequest = async (
     totalHits,
     facets: dbFacets,
     facets_stats,
-  } = result.rows[0].json;
+  } = hooks.applyFilters(
+    'data.test',
+    result.rows[0].json
+  ) as DatabaseResult['rows'][0]['json'];
 
   /**
    * Update results
@@ -299,6 +322,7 @@ const handleRequest = async (
 
 const handleFacetSearch = async (
   request: Inferred.RequestInitial,
+  hooks: Hooks,
   config?: Handler.Config
 ): Promise<FacetsSearchResponse> => {
   /**

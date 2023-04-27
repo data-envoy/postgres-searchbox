@@ -1,4 +1,8 @@
-import type { AlgoliaSettings, AlgoliaSearchResponse } from './bundle.types.js';
+import type {
+  AlgoliaSettings,
+  AlgoliaSearchResponse,
+  Hooks,
+} from './bundle.types.js';
 
 import type { ClientValidation } from './client.types.js';
 export type * from './client.types.js';
@@ -76,6 +80,42 @@ export namespace Handler {
     indexName?: string;
     settings?: Settings;
     clientValidation?: ClientValidation;
+    processHooks?: (hooks: Hooks) => void;
+    extendedAttributes?: [
+      {
+        attributes: string[];
+        filtersJoin: ({
+          format,
+          attribute,
+          type,
+        }: {
+          format: (fmt: string, ...args: any[]) => string;
+          attribute: string;
+          type: {
+            OR: string[] & number[];
+            AND: string[] & number[];
+            'AND NOT': string[] & number[];
+          };
+          typesToString: ({
+            attribute,
+            type,
+          }: {
+            attribute: string;
+            type: {
+              OR: string[] & number[];
+              AND: string[] & number[];
+              'AND NOT': string[] & number[];
+            };
+          }) => string;
+        }) => string;
+        // attribute: string;
+        // values: string[] | number[];
+        // phrase: 'OR' | 'AND' | 'AND NOT';
+        // attribute,
+        // values,
+        // phrase,
+      }
+    ];
   };
 
   // When there is an array with more than one
